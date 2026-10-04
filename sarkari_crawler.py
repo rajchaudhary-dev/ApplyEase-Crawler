@@ -217,6 +217,19 @@ class SarkariCrawler:
         if not clean_title:
             clean_title = a_elem.get_text(" ", strip=True)
 
+        NAV_TITLES = {"latest jobs", "admit card", "result", "answer key", "syllabus", "search", "home", "contact us", "recruitments", "admit cards", "results", "upcoming", "sarkari yojna", "admission", "about us", "privacy policy"}
+        if clean_title.lower() in NAV_TITLES:
+            return None
+
+        # Ensure item matches recruitment taxonomy or contains posts/dates
+        is_recruitment = any(k in clean_title.lower() for k in [
+            "online form", "recruitment", "vacancy", "bharti", "post", "exam", "admit",
+            "constable", "officer", "apprentice", "teacher", "clerk", "engineer", "rally",
+            "assistant", "subedar", "scholarship", "inspector", "cpo", "cgl", "chsl", "mts"
+        ]) or bool(posts) or bool(last_date)
+        if not is_recruitment:
+            return None
+
         # 4. Status determination
         status = "Active"
         raw_lower = raw_text.lower()
@@ -293,6 +306,38 @@ class SarkariCrawler:
                 if item and item["url"] not in seen_urls:
                     seen_urls.add(item["url"])
                     results.append(item)
+
+        # 4. Heading links (handles mirror portals like rojgarresult & portal homepages)
+        if len(results) < 25:
+            for tag in soup.find_all(["h2", "h3", "p", "div"]):
+                a_elem = tag.find("a", href=True)
+                if not a_elem:
+                    continue
+                txt = a_elem.get_text(" ", strip=True)
+                if any(k in txt.lower() for k in ["online form", "recruitment", "vacancy", "bharti", "post"]):
+                    href = a_elem["href"].strip()
+                    full_url = urljoin(self.base_url, href)
+                    if full_url not in seen_urls and not full_url.endswith("/latestjob/"):
+                        raw_text = tag.get_text(" ", strip=True)
+                        m_posts = re.search(r"(\d+)\s*(?:Post|Posts|Vacancy|Vacancies)", raw_text, re.IGNORECASE)
+                        posts = int(m_posts.group(1)) if m_posts else None
+                        clean_title = re.sub(r"for\s+\d+\s+Post.*", "", txt, flags=re.IGNORECASE).strip(" |-\t\n\r")
+                        slug = href.strip("/").split("/")[-1].replace(".html", "")
+                        job_id = f"job-{slug}" if slug else f"job-{abs(hash(clean_title)) % 1000000}"
+                        seen_urls.add(full_url)
+                        results.append({
+                            "id": job_id,
+                            "title": clean_title,
+                            "organization": self.infer_organization(clean_title),
+                            "category": self.classify_category(clean_title),
+                            "posts": posts,
+                            "last_date": None,
+                            "url": full_url,
+                            "status": "Active",
+                            "is_direct_pdf": False,
+                            "source_type": "heading_list",
+                            "raw_text": raw_text
+                        })
 
         return results
 
@@ -421,6 +466,32 @@ class SarkariCrawler:
             except ValueError:
                 pass
 
+        # 4b. 2-Cell Key-Value Row Parsing (handles mirror format: Apply Online Start Date, Fees, Age)
+        for tr in soup.find_all("tr"):
+            cells = [td.get_text(" ", strip=True) for td in tr.find_all(["td", "th"])]
+            if len(cells) >= 2:
+                lbl = cells[0].lower().strip()
+                val = cells[1].strip()
+                if ("apply online start" in lbl or "application begin" in lbl) and not detail["application_begin"]:
+                    detail["application_begin"] = val
+                elif ("apply online last" in lbl or "last date" in lbl) and not detail["last_date_apply"]:
+                    detail["last_date_apply"] = val
+                elif "fee" in lbl and "last date" in lbl and not detail["last_date_fee"]:
+                    detail["last_date_fee"] = val
+                elif "exam date" in lbl and not detail["exam_date"]:
+                    detail["exam_date"] = val
+                elif (("general" in lbl or "obc" in lbl) and "fee" in lbl) or lbl in ["general / obc", "general / obc / ews"]:
+                    if not detail["fee_general_obc"]:
+                        detail["fee_general_obc"] = val
+                elif ("sc" in lbl or "st" in lbl) and not detail["fee_sc_st"]:
+                    detail["fee_sc_st"] = val
+                elif "minimum age" in lbl and not detail["min_age"]:
+                    detail["min_age"] = val
+                elif "maximum age" in lbl and not detail["max_age"]:
+                    detail["max_age"] = val
+                elif "age as on" in lbl and not detail["age_reference_date"]:
+                    detail["age_reference_date"] = val
+
         # 5. Extract Eligibility & Post-Wise Vacancy Breakdown from Tables
         detail["post_wise_vacancies"] = []
         for tr in soup.find_all("tr"):
@@ -533,17 +604,28 @@ class SarkariCrawler:
         Executes vacancy crawl. Reads from live URL or local HTML file.
         Optionally scrapes deep details and dumps official notification PDFs locally.
         """
-        # Step 1: Load main listings HTML
+        # Step 1: Load main listings HTML with automatic mirror failover
         if html_file:
             print(f"[*] Reading offline HTML file: {html_file}")
             with open(html_file, "r", encoding="utf-8", errors="ignore") as f:
                 html_content = f.read()
         else:
-            target_url = url or f"{self.base_url}/latestjob/"
-            print(f"[*] Fetching live vacancy catalog from: {target_url}")
-            html_content = self.fetch_url(target_url)
+            candidates = [
+                url or f"{self.base_url}/latestjob/",
+                "https://www.rojgarresult.com/latestjob/",
+                "https://www.sarkariresult.com/"
+            ]
+            html_content = None
+            for target_url in candidates:
+                print(f"[*] Fetching vacancy catalog from: {target_url}")
+                html_content = self.fetch_url(target_url)
+                if html_content and len(html_content) > 1000:
+                    print(f"[✓] Connected successfully to catalog: {target_url}")
+                    break
+                print(f"[!] Access restricted / forbidden on {target_url}. Trying next mirror source...")
+
             if not html_content:
-                print("[-] Failed to fetch listings HTML. Exiting.", file=sys.stderr)
+                print("[-] Failed to fetch listings HTML from all sources. Exiting.", file=sys.stderr)
                 return []
 
         # Step 2: Parse all listings
