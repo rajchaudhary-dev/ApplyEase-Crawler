@@ -298,7 +298,47 @@ class SarkariCrawler:
                     seen_urls.add(item["url"])
                     results.append(item)
 
-        # 3. Fallback: Any remaining <li> with recruitment links inside .entry-content
+        # 3. Table Rows (handles open government job portals like FreeJobAlert: Post Date, Org, Post Name, Qual, Advt, Last Date, Link)
+        if len(results) < 25:
+            for tr in soup.find_all("tr"):
+                cells = tr.find_all("td")
+                if len(cells) >= 6:
+                    c_texts = [td.get_text(" ", strip=True) for td in cells]
+                    if any(k in c_texts[1].lower() for k in ["recruitment board", "exam / post name", "board"]):
+                        continue
+                    # Validate genuine vacancy row with date pattern in post date or last date
+                    if not re.search(r"\d{1,2}[-/]\d{1,2}", c_texts[0] + " " + c_texts[5]):
+                        continue
+                    a_elem = cells[-1].find("a", href=True) or cells[2].find("a", href=True)
+                    if not a_elem:
+                        continue
+                    href = a_elem["href"].strip()
+                    full_url = urljoin(self.base_url, href)
+                    if full_url not in seen_urls:
+                        seen_urls.add(full_url)
+                        org = c_texts[1]
+                        raw_post_name = c_texts[2]
+                        m_posts = re.search(r"(\d+)\s*(?:Post|Posts|Vacancy|Vacancies)", raw_post_name, re.IGNORECASE)
+                        posts = int(m_posts.group(1)) if m_posts else None
+                        last_date = c_texts[5].strip() if len(c_texts) > 5 else None
+                        clean_title = f"{org} - {re.sub(r'[\s\-•–]+\d+\s*Posts?.*', '', raw_post_name, flags=re.I).strip()}"
+                        slug = href.strip("/").split("/")[-1].replace(".html", "")
+                        job_id = f"job-{slug}" if slug else f"job-{abs(hash(clean_title)) % 1000000}"
+                        results.append({
+                            "id": job_id,
+                            "title": clean_title,
+                            "organization": org,
+                            "category": self.classify_category(clean_title),
+                            "posts": posts,
+                            "last_date": last_date,
+                            "url": full_url,
+                            "status": "Active",
+                            "is_direct_pdf": False,
+                            "source_type": "table_row",
+                            "raw_text": " ".join(c_texts)
+                        })
+
+        # 4. Fallback: Any remaining <li> with recruitment links inside .entry-content
         entry_content = soup.find("div", class_="entry-content")
         if entry_content and len(results) == 0:
             for li in entry_content.find_all("li"):
@@ -307,14 +347,16 @@ class SarkariCrawler:
                     seen_urls.add(item["url"])
                     results.append(item)
 
-        # 4. Heading links (handles mirror portals like rojgarresult & portal homepages)
+        # 5. Heading links (handles mirror portals like rojgarresult & portal homepages)
         if len(results) < 25:
-            for tag in soup.find_all(["h2", "h3", "p", "div"]):
+            for tag in soup.find_all(["h2", "h3"]):
                 a_elem = tag.find("a", href=True)
                 if not a_elem:
                     continue
                 txt = a_elem.get_text(" ", strip=True)
                 if any(k in txt.lower() for k in ["online form", "recruitment", "vacancy", "bharti", "post"]):
+                    if "pass govt jobs" in txt.lower():
+                        continue
                     href = a_elem["href"].strip()
                     full_url = urljoin(self.base_url, href)
                     if full_url not in seen_urls and not full_url.endswith("/latestjob/"):
@@ -547,9 +589,24 @@ class SarkariCrawler:
                         detail["official_links"]["exam_date_notice"] = href
                     elif "admit card" in label:
                         detail["official_links"]["admit_card"] = href
-                        detail["official_links"]["syllabus"] = href
-                    elif "admit card" in label:
-                        detail["official_links"]["admit_card"] = href
+
+        # Fallback: scan any <a> tag for direct PDF links or apply URLs
+        if not detail["official_links"].get("notification_pdf"):
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                txt = a.get_text(" ", strip=True).lower()
+                if href.lower().endswith(".pdf") or ("notification" in txt and ("gov.in" in href or "nic.in" in href or "pdf" in href)):
+                    if not href.startswith("#"):
+                        detail["official_links"]["notification_pdf"] = href
+                        break
+
+        if not detail["official_links"].get("apply_online"):
+            for a in soup.find_all("a", href=True):
+                href = a["href"].strip()
+                txt = a.get_text(" ", strip=True).lower()
+                if ("apply online" in txt or txt == "apply now") and not href.startswith("#"):
+                    detail["official_links"]["apply_online"] = href
+                    break
 
         return detail
 
@@ -562,6 +619,9 @@ class SarkariCrawler:
         import urllib3
         urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
+        if not pdf_url or not pdf_url.startswith("http") or "blob:" in pdf_url:
+            return None
+
         try:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             # Try with standard session first
@@ -612,6 +672,7 @@ class SarkariCrawler:
         else:
             candidates = [
                 url or f"{self.base_url}/latestjob/",
+                "https://www.freejobalert.com/government-jobs/",
                 "https://www.rojgarresult.com/latestjob/",
                 "https://www.sarkariresult.com/"
             ]
