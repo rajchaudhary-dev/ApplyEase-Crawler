@@ -27,4 +27,4 @@ jobs:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          python sarkari_crawler.py --limit 30 --deep --download-pdfs --supabase --output-json vacancies.json
+          python sarkari_crawler.py --limit 15 --deep --download-pdfs --supabase --output-json vacancies.json

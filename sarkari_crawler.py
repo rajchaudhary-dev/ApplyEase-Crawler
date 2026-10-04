@@ -627,10 +627,10 @@ class SarkariCrawler:
             os.makedirs(os.path.dirname(output_path), exist_ok=True)
             # Try with standard session first
             try:
-                resp = self.session.get(pdf_url, stream=True, timeout=40)
+                resp = self.session.get(pdf_url, stream=True, timeout=12)
             except Exception:
                 # State government portals (nic.in / gov.in) frequently have outdated cert chains
-                resp = requests.get(pdf_url, headers=DEFAULT_HEADERS, stream=True, timeout=40, verify=False)
+                resp = requests.get(pdf_url, headers=DEFAULT_HEADERS, stream=True, timeout=12, verify=False)
 
             if resp.status_code != 200:
                 return None
@@ -717,10 +717,10 @@ class SarkariCrawler:
 
         # Step 6: Download official notification PDFs if requested
         if download_pdfs and jobs:
-            print(f"[*] Downloading notification PDFs to '{pdf_dir}' for Gemini / DB ingestion...")
+            print(f"[*] Downloading notification PDFs to '{pdf_dir}' for Gemini / DB ingestion (concurrently)...")
             os.makedirs(pdf_dir, exist_ok=True)
-            download_count = 0
-            for j in jobs:
+
+            def download_job_docs(j: Dict[str, Any]):
                 pdf_url = None
                 if j.get("is_direct_pdf"):
                     pdf_url = j.get("url")
@@ -728,32 +728,36 @@ class SarkariCrawler:
                     pdf_url = j["details"].get("official_links", {}).get("notification_pdf")
 
                 if pdf_url and pdf_url.startswith("http"):
-                    pdf_filename = f"{j['id']}.pdf"
-                    target_pdf_path = os.path.join(pdf_dir, pdf_filename)
-                    print(f"    --> Downloading Gazette PDF for '{j['title'][:40]}...'")
+                    target_pdf_path = os.path.join(pdf_dir, f"{j['id']}.pdf")
                     size = self.download_pdf(pdf_url, target_pdf_path)
                     if size and size > 1000:
                         j["local_pdf_path"] = target_pdf_path
                         j["pdf_size_bytes"] = size
                         j["pdf_status"] = "downloaded"
-                        download_count += 1
                         print(f"        [✓] Saved Gazette {round(size / 1024, 1)} KB -> {target_pdf_path}")
                     else:
                         j["pdf_status"] = "failed_or_empty"
                 else:
                     j["pdf_status"] = "no_pdf_url"
 
-                # Also download Syllabus PDF if available
                 syllabus_url = j.get("details", {}).get("official_links", {}).get("syllabus")
                 if syllabus_url and syllabus_url.startswith("http"):
-                    syllabus_filename = f"{j['id']}-syllabus.pdf"
-                    target_syl_path = os.path.join(pdf_dir, syllabus_filename)
-                    print(f"    --> Downloading Syllabus PDF for '{j['title'][:40]}...'")
+                    target_syl_path = os.path.join(pdf_dir, f"{j['id']}-syllabus.pdf")
                     syl_size = self.download_pdf(syllabus_url, target_syl_path)
                     if syl_size and syl_size > 1000:
                         j["local_syllabus_path"] = target_syl_path
                         j["syllabus_size_bytes"] = syl_size
                         print(f"        [✓] Saved Syllabus {round(syl_size / 1024, 1)} KB -> {target_syl_path}")
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(download_job_docs, j) for j in jobs]
+                for f in as_completed(futures):
+                    try:
+                        f.result()
+                    except Exception as e:
+                        print(f"[!] Error in doc download thread: {e}", file=sys.stderr)
+
+            download_count = len([j for j in jobs if j.get("pdf_status") == "downloaded"])
             print(f"[✓] Downloaded {download_count} notification PDFs into '{pdf_dir}'.")
 
         return jobs
