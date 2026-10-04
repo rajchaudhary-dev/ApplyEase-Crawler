@@ -738,23 +738,44 @@ def sync_to_supabase(
                 print(f"    [!] Error uploading Syllabus to Supabase Storage: {e}", file=sys.stderr)
 
         # 3. Upsert record into 'vacancies' table
+        det = j.get("details", {})
+        dates_payload = {
+            "application_begin": det.get("application_begin"),
+            "last_date_apply": det.get("last_date_apply"),
+            "last_date_fee": det.get("last_date_fee"),
+            "exam_date": det.get("exam_date"),
+            "listing_last_date": j.get("last_date")
+        }
+        fees_payload = {
+            "general_obc": det.get("fee_general_obc"),
+            "sc_st": det.get("fee_sc_st"),
+            "ph": det.get("fee_ph")
+        }
+        age_payload = {
+            "min_age": det.get("min_age"),
+            "max_age": det.get("max_age"),
+            "reference_date": det.get("age_reference_date")
+        }
+
         payload = {
             "id": job_id,
             "title": j["title"],
-            "organization": j.get("organization"),
-            "category": j.get("category"),
-            "total_posts": j.get("posts"),
-            "last_date": j.get("last_date"),
-            "status": j.get("status", "Active"),
-            "source_url": j.get("url"),
-            "details": j.get("details", {}),
-            "eligibility_summary": j.get("details", {}).get("eligibility", ""),
-            "notification_pdf_url": j.get("supabase_notification_pdf_url") or j.get("details", {}).get("official_links", {}).get("notification_pdf"),
-            "syllabus_pdf_url": j.get("supabase_syllabus_pdf_url") or j.get("details", {}).get("official_links", {}).get("syllabus"),
+            "org": j.get("organization") or "",
+            "post_name": j["title"],
+            "total_posts": str(j.get("posts") or det.get("total_posts") or ""),
+            "detail_url": j.get("url") or "",
+            "dates": dates_payload,
+            "fees": fees_payload,
+            "age_limit": age_payload,
+            "posts_matrix": det.get("post_wise_vacancies", []),
+            "links": det.get("official_links", {}),
+            "notification_pdf_storage_url": j.get("supabase_notification_pdf_url") or det.get("official_links", {}).get("notification_pdf"),
+            "syllabus_storage_url": j.get("supabase_syllabus_pdf_url") or det.get("official_links", {}).get("syllabus"),
+            "source_tag": j.get("category", "sarkari_result"),
             "updated_at": "now()"
         }
 
-        endpoint = f"{sb_url}/rest/v1/vacancies"
+        endpoint = f"{sb_url}/rest/v1/vacancies?on_conflict=id"
         try:
             resp = requests.post(endpoint, headers=headers, json=payload, timeout=15)
             if resp.status_code in [200, 201]:
