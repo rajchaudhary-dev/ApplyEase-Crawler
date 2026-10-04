@@ -1,0 +1,30 @@
+name: Sarkari Result Recruitment Sync Cron
+
+on:
+  schedule:
+    # Runs every 6 hours (at minute 0 past every 6th hour)
+    - cron: '0 */6 * * *'
+  workflow_dispatch: # Allows manual trigger from GitHub UI
+
+jobs:
+  sync-vacancies:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests beautifulsoup4 lxml urllib3
+
+      - name: Run Sarkari Crawler & PDF Downloader
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: |
+          python sarkari_crawler.py --limit 30 --deep --download-pdfs --supabase --output-json vacancies.json

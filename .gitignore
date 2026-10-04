@@ -1,0 +1,26 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Full Product (Backend & Frontend are in separate project repos)
+backend/
+frontend/
+PRODUCT_README.md
+data/
+
+# Local environment & secrets
+.env
+.env.local
+*.env
+
+# Local downloaded PDFs & test dumps (PDFs go to Supabase Storage, not Git)
+vacancies*.json
+vacancies*.csv
+ssc_cpo_sample.json
+
+# IDE / OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
