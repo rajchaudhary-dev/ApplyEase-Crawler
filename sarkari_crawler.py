@@ -321,7 +321,8 @@ class SarkariCrawler:
                         m_posts = re.search(r"(\d+)\s*(?:Post|Posts|Vacancy|Vacancies)", raw_post_name, re.IGNORECASE)
                         posts = int(m_posts.group(1)) if m_posts else None
                         last_date = c_texts[5].strip() if len(c_texts) > 5 else None
-                        clean_title = f"{org} - {re.sub(r'[\s\-•–]+\d+\s*Posts?.*', '', raw_post_name, flags=re.I).strip()}"
+                        clean_name = re.sub(r"[\s\-•–]+\d+\s*Posts?.*", "", raw_post_name, flags=re.I).strip()
+                        clean_title = f"{org} - {clean_name}"
                         slug = href.strip("/").split("/")[-1].replace(".html", "")
                         job_id = f"job-{slug}" if slug else f"job-{abs(hash(clean_title)) % 1000000}"
                         results.append({
