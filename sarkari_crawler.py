@@ -45,6 +45,13 @@ from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+# Anti-Cloudflare TLS fingerprint impersonation (bypasses 403 Forbidden on GitHub Actions / cloud IPs)
+try:
+    from curl_cffi import requests as cffi_requests
+    HAVE_CURL_CFFI = True
+except ImportError:
+    HAVE_CURL_CFFI = False
+
 # Optional rich formatting for CLI table output
 try:
     from rich.console import Console
@@ -91,13 +98,19 @@ class SarkariCrawler:
     Crawler and parser for Sarkari Result recruitment vacancies.
     """
 
-    def __init__(self, base_url: str = "https://www.sarkariresult.com", timeout: int = 15, delay_range: tuple = (0.3, 0.8)):
+    def __init__(self, base_url: str = "https://www.sarkariresult.com", timeout: int = 20, delay_range: tuple = (0.3, 0.8)):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.delay_range = delay_range
         self.session = self._init_session()
 
-    def _init_session(self) -> requests.Session:
+    def _init_session(self):
+        if HAVE_CURL_CFFI:
+            # Emulates genuine Chrome browser TLS fingerprint (JA3/JA4) & HTTP/2 to bypass Cloudflare bot filters
+            session = cffi_requests.Session(impersonate="chrome124")
+            session.headers.update(DEFAULT_HEADERS)
+            return session
+
         session = requests.Session()
         session.headers.update(DEFAULT_HEADERS)
         retry_strategy = Retry(
@@ -118,10 +131,21 @@ class SarkariCrawler:
         try:
             resp = self.session.get(url, timeout=self.timeout)
             resp.raise_for_status()
-            # Sarkari Result pages are UTF-8 or ISO-8859-1; apparent_encoding provides best fallback
-            resp.encoding = resp.apparent_encoding or "utf-8"
+            if hasattr(resp, "apparent_encoding") and resp.apparent_encoding:
+                resp.encoding = resp.apparent_encoding
+            elif hasattr(resp, "encoding") and resp.encoding:
+                pass
+            else:
+                resp.encoding = "utf-8"
             return resp.text
-        except requests.exceptions.RequestException as e:
+        except Exception as e:
+            if HAVE_CURL_CFFI:
+                try:
+                    resp = cffi_requests.get(url, impersonate="chrome124", headers=DEFAULT_HEADERS, timeout=self.timeout)
+                    if resp.status_code == 200:
+                        return resp.text
+                except Exception:
+                    pass
             print(f"[!] Request error fetching {url}: {e}", file=sys.stderr)
             return None
 
@@ -472,7 +496,7 @@ class SarkariCrawler:
             # Try with standard session first
             try:
                 resp = self.session.get(pdf_url, stream=True, timeout=40)
-            except requests.exceptions.SSLError:
+            except Exception:
                 # State government portals (nic.in / gov.in) frequently have outdated cert chains
                 resp = requests.get(pdf_url, headers=DEFAULT_HEADERS, stream=True, timeout=40, verify=False)
 
@@ -480,10 +504,14 @@ class SarkariCrawler:
                 return None
             total_bytes = 0
             with open(output_path, "wb") as f:
-                for chunk in resp.iter_content(chunk_size=65536):
-                    if chunk:
-                        f.write(chunk)
-                        total_bytes += len(chunk)
+                if hasattr(resp, "iter_content"):
+                    for chunk in resp.iter_content(chunk_size=65536):
+                        if chunk:
+                            f.write(chunk)
+                            total_bytes += len(chunk)
+                else:
+                    f.write(resp.content)
+                    total_bytes = len(resp.content)
             return total_bytes
         except Exception as e:
             print(f"[!] Error downloading notification PDF from {pdf_url}: {e}", file=sys.stderr)
