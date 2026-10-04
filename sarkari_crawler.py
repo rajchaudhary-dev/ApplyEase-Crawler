@@ -851,8 +851,13 @@ def sync_to_supabase(
     Upserts crawled vacancy records and uploads PDFs directly to Supabase DB & Storage.
     Reads from environment variables SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY if not passed.
     """
-    sb_url = (supabase_url or os.environ.get("SUPABASE_URL", "")).strip().rstrip("/")
-    sb_key = (supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")).strip()
+    raw_url = supabase_url or os.environ.get("SUPABASE_URL", "")
+    sb_url = "".join(raw_url.split()).rstrip("/")
+    if sb_url and not sb_url.startswith("http"):
+        sb_url = f"https://{sb_url}"
+
+    raw_key = supabase_key or os.environ.get("SUPABASE_SERVICE_ROLE_KEY") or os.environ.get("SUPABASE_KEY", "")
+    sb_key = "".join(raw_key.split())
 
     if not sb_url or not sb_key:
         print("[!] Supabase URL or Key missing. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY to sync.", file=sys.stderr)
