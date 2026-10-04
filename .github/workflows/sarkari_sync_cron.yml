@@ -24,7 +24,9 @@ jobs:
 
       - name: Run Sarkari Crawler & PDF Downloader
         env:
-          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          SUPABASE_URL_RAW: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY_RAW: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: |
-          python sarkari_crawler.py --limit 15 --deep --download-pdfs --supabase --output-json vacancies.json
+          CLEAN_URL=$(echo "$SUPABASE_URL_RAW" | tr -d '[:space:]')
+          CLEAN_KEY=$(echo "$SUPABASE_KEY_RAW" | tr -d '[:space:]')
+          python sarkari_crawler.py --limit 15 --deep --download-pdfs --supabase --supabase-url "$CLEAN_URL" --supabase-key "$CLEAN_KEY" --output-json vacancies.json
